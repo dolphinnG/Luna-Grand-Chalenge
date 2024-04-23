@@ -9,8 +9,7 @@ import torch
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 
-from test.util.util import xyz2irc
-from utilG import getCacheHandle, unzipped_path
+from utilG import getCacheHandle, unzipped_path, xyz2irc
 import SimpleITK as sitk
 
 # log = logging.getLogger('ggggg')
@@ -130,14 +129,12 @@ def create_df_candidates_info() -> pd.DataFrame:
 
 
     def g_compare_rows(cand_row):
-        
         def delta_mm_is_within_tolerance(candidate_xyz, annotation_xyz, annotation_diameter_mm):
             for i in range(3):
                 delta_mm = abs(candidate_xyz[i] - annotation_xyz[i])
                 if delta_mm > annotation_diameter_mm / 4:
                     return False
             return True
-        
         if cand_row.name not in new_df_anno.index: #row.name is the seriesuid
             return cand_row
         # print(cand_row)
@@ -180,10 +177,14 @@ class LunaDataset(Dataset):
         # log.debug(self.df_candidates)
         candidateInfo = self.df_candidates.iloc[idx]
         ct_cropped = get_ct_cropped_disk_cache(candidateInfo.name, candidateInfo['xyzCoord'])
-        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch dimension
+        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch input dimension
         isNodule_label = candidateInfo['isNodule']
         # one_hot_encoding_tensor = F.one_hot(labels).to(torch.float32)
-        one_hot_encoding_tensor = torch.tensor([0, 1]) if isNodule_label else torch.tensor([1, 0])
+        
+        # one_hot_encoding_tensor = torch.tensor([0, 1]) if isNodule_label else torch.tensor([1, 0])
+        # one_hot_encoding_tensor = one_hot_encoding_tensor.to(torch.long)
+        
+        one_hot_encoding_tensor = torch.tensor(isNodule_label).to(torch.long)
         return ct_cropped, one_hot_encoding_tensor
 
 # training and validation datasets classes, which share the same parent self.df_candidates, 
