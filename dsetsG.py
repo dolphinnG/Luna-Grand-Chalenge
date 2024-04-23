@@ -1,5 +1,6 @@
 from functools import lru_cache
 import glob
+import logging
 import os
 
 import numpy as np
@@ -12,38 +13,14 @@ from test.util.util import xyz2irc
 from utilG import getCacheHandle, unzipped_path
 import SimpleITK as sitk
 
+# log = logging.getLogger('ggggg')
+# # log.setLevel(logging.WARN)
+# # log.setLevel(logging.INFO)
+# log.setLevel(logging.DEBUG)
 
 disk_cache = getCacheHandle('test1')
 
-class LunaDataset(Dataset):
-    #custome implementation of a dataset that loads the CT scans and candidate info
-    def __init__(self, frac=.7):
-        self.df_candidates = create_df_candidates_info().copy(deep=True)
-        self.df_candidates = self.df_candidates.sample(frac=1) #shuffle
-        self.frac_split_idx = int(frac * len(self.df_candidates))
-    
-    def __len__(self):
-        return len(self.df_candidates)
-    
-    def __getitem__(self, idx):
-        candidateInfo = self.df_candidates.iloc[idx]
-        ct_cropped = get_ct_cropped_disk_cache(candidateInfo.name, candidateInfo['xyzCoord'])
-        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch dimension
-        isNodule_label = candidateInfo['isNodule']
-        # one_hot_encoding_tensor = F.one_hot(labels).to(torch.float32)
-        one_hot_encoding_tensor = torch.tensor([0, 1]) if isNodule_label else torch.tensor([1, 0])
-        return ct_cropped, one_hot_encoding_tensor
 
-#training and validation datasets classes, which share the same parent self.df_candidates, but the shared df_candidates is splitted
-class LunaDataset_Train(LunaDataset):
-    def __init__(self):
-        super().__init__()
-        self.df_candidates = self.df_candidates[:self.frac_split_idx]
-        
-class LunaDataset_Val(LunaDataset):
-    def __init__(self):
-        super().__init__()
-        self.df_candidates = self.df_candidates[self.frac_split_idx:]
 
 
 
@@ -185,3 +162,38 @@ def create_df_candidates_info() -> pd.DataFrame:
     return df_candidates_info
 
 
+class LunaDataset(Dataset):
+    #custome implementation of a dataset that loads the CT scans and candidate info
+    df_candidates = create_df_candidates_info().sample(frac=1) 
+    # dataloader probably does shallow copy of the object when numworkers > 0
+    # so df_candidates must stay outside of __init__ for it to be copied to each worker
+    def __init__(self, frac=.7):
+        # if not hasattr(LunaDataset, 'df_candidates') or LunaDataset.df_candidates is None:
+        #     LunaDataset.df_candidates = create_df_candidates_info() # no copy, beware
+        #     LunaDataset.df_candidates = self.df_candidates.sample(frac=1) #shuffle
+        self.frac_split_idx = int(frac * len(self.df_candidates))
+    
+    def __len__(self):
+        return len(self.df_candidates)
+    
+    def __getitem__(self, idx):
+        # log.debug(self.df_candidates)
+        candidateInfo = self.df_candidates.iloc[idx]
+        ct_cropped = get_ct_cropped_disk_cache(candidateInfo.name, candidateInfo['xyzCoord'])
+        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch dimension
+        isNodule_label = candidateInfo['isNodule']
+        # one_hot_encoding_tensor = F.one_hot(labels).to(torch.float32)
+        one_hot_encoding_tensor = torch.tensor([0, 1]) if isNodule_label else torch.tensor([1, 0])
+        return ct_cropped, one_hot_encoding_tensor
+
+# training and validation datasets classes, which share the same parent self.df_candidates, 
+# but the shared df_candidates is splitted
+class LunaDataset_Train(LunaDataset):
+    def __init__(self):
+        super().__init__()
+        self.df_candidates = self.df_candidates[:self.frac_split_idx]
+        
+class LunaDataset_Val(LunaDataset):
+    def __init__(self):
+        super().__init__()
+        self.df_candidates = self.df_candidates[self.frac_split_idx:]
