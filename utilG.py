@@ -25,7 +25,7 @@ def enumerateWithEstimate(
         loop_title,
         start_ndx=0,
         print_ndx=4,
-        jump=2,
+        jump=4,
         iter_len=None,
 ):
     """cool function to print out the progress of a loop"""

@@ -164,18 +164,34 @@ class LunaDataset(Dataset):
     df_candidates = create_df_candidates_info().sample(frac=1) 
     # dataloader probably does shallow copy of the object when numworkers > 0
     # so df_candidates must stay outside of __init__ for it to be copied to each worker
-    def __init__(self, frac=.7):
+    def __init__(self, *, frac=.7, balance=True, augmentation=True):
         # if not hasattr(LunaDataset, 'df_candidates') or LunaDataset.df_candidates is None:
         #     LunaDataset.df_candidates = create_df_candidates_info() # no copy, beware
         #     LunaDataset.df_candidates = self.df_candidates.sample(frac=1) #shuffle
         self.frac_split_idx = int(frac * len(self.df_candidates))
-    
+        self.balance = balance
+        self.augmentation = augmentation
+        self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
+        
     def __len__(self):
         return len(self.df_candidates)
     
     def __getitem__(self, idx):
-        # log.debug(self.df_candidates)
-        candidateInfo = self.df_candidates.iloc[idx]
+        if self.balance:
+            pos_idx = idx // (self.balance + 1) 
+            # every balance + 1 samples, we will have a positive sample
+
+            if idx % (self.balance + 1):
+                neg_idx = idx - 1 - pos_idx # adjust the idx 
+                neg_idx %= len(self.negatives)
+                candidateInfo = self.negatives.iloc[neg_idx]
+            else:
+                pos_idx %= len(self.positives) #pos_list is small, so need to wraps around, otherwise will overflow
+                candidateInfo = self.positives.iloc[pos_idx]
+        else: # if balance is fasle, then we don't need to balance the dataset
+            # this is for validation set
+            candidateInfo = self.df_candidates.iloc[idx]
+            
         ct_cropped = get_ct_cropped_disk_cache(candidateInfo.name, candidateInfo['xyzCoord'])
         ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch input dimension
         isNodule_label = candidateInfo['isNodule']
@@ -186,15 +202,25 @@ class LunaDataset(Dataset):
         
         one_hot_encoding_tensor = torch.tensor(isNodule_label).to(torch.long)
         return ct_cropped, one_hot_encoding_tensor
+    
+    def split_neg_pos(self, df_candidates) -> tuple[pd.DataFrame, pd.DataFrame]:
+        return (df_candidates[self.df_candidates['isNodule']], 
+                df_candidates[~self.df_candidates['isNodule']])
+        
+    def do_augmentation(self, ct_cropped):
+        pass
 
 # training and validation datasets classes, which share the same parent self.df_candidates, 
 # but the shared df_candidates is splitted
 class LunaDataset_Train(LunaDataset):
     def __init__(self):
-        super().__init__()
+        super().__init__(balance=True, augmentation=True)
         self.df_candidates = self.df_candidates[:self.frac_split_idx]
+        self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
+        
         
 class LunaDataset_Val(LunaDataset):
     def __init__(self):
-        super().__init__()
+        super().__init__(balance=False, augmentation=False)
         self.df_candidates = self.df_candidates[self.frac_split_idx:]
+        # self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
