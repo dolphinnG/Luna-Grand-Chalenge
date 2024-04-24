@@ -1,7 +1,9 @@
 from functools import lru_cache
 import glob
 import logging
+import math
 import os
+import random
 
 import numpy as np
 import pandas as pd
@@ -156,19 +158,28 @@ def create_df_candidates_info() -> pd.DataFrame:
     df_candidates_info['class'] = df_candidates_info['class'].astype(int).astype(bool)
     df_candidates_info.rename(columns={'class': 'isNodule'}, inplace=True)
     df_candidates_info['diameter_mm'] = df_candidates_info['diameter_mm'].astype(float)
-    return df_candidates_info
+    df_candidates_info_reset_index = df_candidates_info.reset_index()
+    return df_candidates_info_reset_index
 
-
+holder = create_df_candidates_info()
 class LunaDataset(Dataset):
     #custome implementation of a dataset that loads the CT scans and candidate info
-    df_candidates = create_df_candidates_info().sample(frac=1) 
+    
+    
+    # df_candidates = create_df_candidates_info().sample(frac=1) 
+    df_candidates = holder
+    # num_samples = int(0.7 * len(df_candidates)) # lambda will automatically look for instance attributes
+    grouped = df_candidates.groupby('isNodule')
+    df_train = grouped.apply(lambda x: x.sample(int(int(0.7 * len(holder)) * len(x) / len(holder))), include_groups=False) \
+        .reset_index(drop=False, inplace=False)
+    df_val = df_candidates.drop(df_train.index).reset_index(drop=False, inplace=False)
     # dataloader probably does shallow copy of the object when numworkers > 0
     # so df_candidates must stay outside of __init__ for it to be copied to each worker
     def __init__(self, *, frac=.7, balance=True, augmentation=True):
         # if not hasattr(LunaDataset, 'df_candidates') or LunaDataset.df_candidates is None:
         #     LunaDataset.df_candidates = create_df_candidates_info() # no copy, beware
         #     LunaDataset.df_candidates = self.df_candidates.sample(frac=1) #shuffle
-        self.frac_split_idx = int(frac * len(self.df_candidates))
+        # self.frac_split_idx = int(frac * len(self.df_candidates))
         self.balance = balance
         self.augmentation = augmentation
         self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
@@ -192,8 +203,10 @@ class LunaDataset(Dataset):
             # this is for validation set
             candidateInfo = self.df_candidates.iloc[idx]
             
-        ct_cropped = get_ct_cropped_disk_cache(candidateInfo.name, candidateInfo['xyzCoord'])
-        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add batch input dimension
+        ct_cropped = get_ct_cropped_disk_cache(candidateInfo['seriesuid'], candidateInfo['xyzCoord'])
+        ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add channel input dimension
+        ct_cropped = self.do_augmentation(ct_cropped)
+        
         isNodule_label = candidateInfo['isNodule']
         # one_hot_encoding_tensor = F.one_hot(labels).to(torch.float32)
         
@@ -208,19 +221,73 @@ class LunaDataset(Dataset):
                 df_candidates[~self.df_candidates['isNodule']])
         
     def do_augmentation(self, ct_cropped):
-        pass
+        ct_cropped_tensor = ct_cropped.unsqueeze(0) 
+        # add batch dimension, because the affine_grid and grid_sample functions want a batch of images
+        # but we only have one image, so we add a batch dimension of 1
+        # and we will remove the batch dimension after the augmentation
+
+        transform_t = torch.eye(4)       
+        for i in range(3):
+            if random.random() > 0.5:
+                transform_t[i,i] *= -1 # i,i because we want to be in 3d space
+
+            random_float = (random.random() * 2 - 1)
+            transform_t[i,3] = 0.1 * random_float  
+            # the last(4th) column of the matrix is for translation, 
+            # but the 4th element of the 4th column is always 1 
+            # because we are in 3D space, so 4d coord is fixed at 1. 
+            # That's why for loop of 3 is enough
+
+            random_float = (random.random() * 2 - 1)
+            transform_t[i,i] *= 1.0 + 0.2 * random_float
+            # i,i because we want to be in 3d space
+
+            angle_rad = random.random() * math.pi * 2
+            s = math.sin(angle_rad)
+            c = math.cos(angle_rad)
+            # 2d rotation in x-y plane so we dont break the z axis, because voxels isnt cubic in z axis
+            rotation_t = torch.tensor([ # rotation in 2d space
+                [c, -s, 0, 0],
+                [s, c, 0, 0],
+                [0, 0, 1, 0],
+                [0, 0, 0, 1],
+            ])
+            transform_t @= rotation_t
+
+        affine_t = F.affine_grid(
+                # the affine_grid function watns a 4x3 matrix for 3d transform, 
+                # so we need to remove the last row of the transform matrix
+                transform_t[:3].unsqueeze(0).to(torch.float32), 
+                list(ct_cropped_tensor.shape),
+                align_corners=False,
+            )
+
+        augmented_chunk = F.grid_sample(
+                ct_cropped_tensor,
+                affine_t,
+                padding_mode='border',
+                align_corners=False,
+            )
+
+        noise_t = torch.randn_like(augmented_chunk)
+        noise_t *= 20.0
+
+        augmented_chunk += noise_t
+        return augmented_chunk.squeeze(0) # remove the batch dimension
 
 # training and validation datasets classes, which share the same parent self.df_candidates, 
 # but the shared df_candidates is splitted
 class LunaDataset_Train(LunaDataset):
     def __init__(self):
         super().__init__(balance=True, augmentation=True)
-        self.df_candidates = self.df_candidates[:self.frac_split_idx]
+        # self.df_candidates = self.df_candidates[:self.frac_split_idx]
+        self.df_candidates = self.df_train
         self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
         
         
 class LunaDataset_Val(LunaDataset):
     def __init__(self):
         super().__init__(balance=False, augmentation=False)
-        self.df_candidates = self.df_candidates[self.frac_split_idx:]
+        # self.df_candidates = self.df_candidates[self.frac_split_idx:]
+        self.df_candidates = self.df_val
         # self.positives, self.negatives = self.split_neg_pos(self.df_candidates)

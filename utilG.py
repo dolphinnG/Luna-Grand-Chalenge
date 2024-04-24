@@ -11,10 +11,10 @@ log = logging.getLogger(__name__)
 log.setLevel(logging.DEBUG)
 
 unzipped_path = 'C:\\Users\\justm\\OneDrive\\Desktop\\New folder\\unzipped\\'
-
+cache_path = 'disk_cache/'
 def getCacheHandle(scope_str):
     #Caches have an additional feature: memoizing decorator. The decorator wraps a callable and caches arguments and return values.
-    return FanoutCache('disk_cache/' + scope_str,
+    return FanoutCache(cache_path + scope_str,
                        disk=Disk,
                        shards=64,
                        timeout=1,
