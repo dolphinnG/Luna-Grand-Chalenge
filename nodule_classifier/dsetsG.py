@@ -11,7 +11,7 @@ import torch
 from torch.utils.data import Dataset
 import torch.nn.functional as F
 
-from utilG import getCacheHandle, unzipped_path, xyz2irc
+from util.utilG import getCacheHandle, unzipped_path, xyz2irc
 import SimpleITK as sitk
 
 # log = logging.getLogger('ggggg')

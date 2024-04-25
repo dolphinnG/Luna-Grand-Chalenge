@@ -4,7 +4,7 @@ import datetime
 import time
 from diskcache import Disk, FanoutCache
 import numpy as np
-from test.util.logconf import logging
+from util.logconf import logging
 log = logging.getLogger(__name__)
 # log.setLevel(logging.WARN)
 # log.setLevel(logging.INFO)
