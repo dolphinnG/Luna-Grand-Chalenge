@@ -161,28 +161,31 @@ def create_df_candidates_info() -> pd.DataFrame:
     df_candidates_info_reset_index = df_candidates_info.reset_index()
     return df_candidates_info_reset_index
 
-holder = create_df_candidates_info()
+holder = create_df_candidates_info() #anti pattern, should fix this
 class LunaDataset(Dataset):
     #custome implementation of a dataset that loads the CT scans and candidate info
     
     
     # df_candidates = create_df_candidates_info().sample(frac=1) 
+    """we have to perform stratified split on the dataset, because the dataset is extremely imbalanced"""
     df_candidates = holder
     # num_samples = int(0.7 * len(df_candidates)) # lambda will automatically look for instance attributes
     grouped = df_candidates.groupby('isNodule')
     df_train = grouped.apply(lambda x: x.sample(int(int(0.7 * len(holder)) * len(x) / len(holder))), include_groups=False) \
         .reset_index(drop=False, inplace=False)
     df_val = df_candidates.drop(df_train.index).reset_index(drop=False, inplace=False)
+    
+    
     # dataloader probably does shallow copy of the object when numworkers > 0
     # so df_candidates must stay outside of __init__ for it to be copied to each worker
-    def __init__(self, *, frac=.7, balance=True, augmentation=True):
+    def __init__(self, *, frac=.7, balance=True, augmentation=None) -> None:
         # if not hasattr(LunaDataset, 'df_candidates') or LunaDataset.df_candidates is None:
         #     LunaDataset.df_candidates = create_df_candidates_info() # no copy, beware
         #     LunaDataset.df_candidates = self.df_candidates.sample(frac=1) #shuffle
         # self.frac_split_idx = int(frac * len(self.df_candidates))
         self.balance = balance
-        self.augmentation = augmentation
         self.positives, self.negatives = self.split_neg_pos(self.df_candidates)
+        self.augmentation = augmentation
         
     def __len__(self):
         return len(self.df_candidates)
@@ -205,7 +208,8 @@ class LunaDataset(Dataset):
             
         ct_cropped = get_ct_cropped_disk_cache(candidateInfo['seriesuid'], candidateInfo['xyzCoord'])
         ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add channel input dimension
-        ct_cropped = self.do_augmentation(ct_cropped)
+        if self.augmentation:
+            ct_cropped = self.do_augmentation(ct_cropped) 
         
         isNodule_label = candidateInfo['isNodule']
         # one_hot_encoding_tensor = F.one_hot(labels).to(torch.float32)
