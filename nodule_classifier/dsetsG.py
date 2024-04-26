@@ -19,7 +19,7 @@ import SimpleITK as sitk
 # # log.setLevel(logging.INFO)
 # log.setLevel(logging.DEBUG)
 
-disk_cache = getCacheHandle('test1')
+disk_cache = getCacheHandle('test2')
 
 
 
@@ -38,7 +38,7 @@ class CTScan:
         self.origin_xyz = np.array(ct_img.GetOrigin())
         self.vxSize_xyz = np.array(ct_img.GetSpacing())
         self.direction_matrix = np.array(ct_img.GetDirection()).reshape(3, 3)
-        self.positive_mask = None # holder for positive mask, used by CTScan_seg class
+        self.positive_mask = [] # holder for positive mask, used by CTScan_seg class
     
     def get_ct_cropped(self, center_xyz, axis_sizes = (32, 48, 48)):
         """
@@ -64,21 +64,22 @@ class CTScan:
             
             slices.append(slice(start_idx, end_idx))
         ct_cropped = self.ct_img_arr[tuple(slices)] # get the cropped chunk of the CT scan
-        if self.positive_mask: 
+        if len(self.positive_mask) > 0: 
+            self.positive_mask:np.ndarray
             mask_cropped = self.positive_mask[tuple(slices)] # get the cropped chunk of the positive mask
             return ct_cropped, mask_cropped
         return ct_cropped, None
     
-    @staticmethod
+    @classmethod
     @lru_cache(maxsize=1, typed=True)
-    def _get_single_ct_lru_cache(seriesuid): #inner use only
-        ct = CTScan(seriesuid)
+    def _get_single_ct_lru_cache(cls, seriesuid): #inner use only
+        ct = cls(seriesuid) #CTxxx class
         return ct
     
-    @staticmethod
+    @classmethod
     @disk_cache.memoize(typed=True)
-    def get_ct_cropped_disk_cache(seriesuid, center_xyz, axis_sizes = (32, 48, 48)):
-        ct = CTScan._get_single_ct_lru_cache(seriesuid)
+    def get_ct_cropped_disk_cache(cls, seriesuid, center_xyz, axis_sizes = (32, 48, 48)):
+        ct = cls._get_single_ct_lru_cache(seriesuid)
         # this is why need lru cache of size 1, 
         # but we shuffled the dataset, size 1 cache is not enough
         # so single ct object cache is only useful during prepcache, the datasets always rely on diskcached ct chunks
@@ -218,6 +219,8 @@ class LunaDataset(Dataset):
             
         ct_cropped, _ = CTScan.get_ct_cropped_disk_cache(candidateInfo['seriesuid'], candidateInfo['xyzCoord'])
         ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add channel input dimension
+        # the dimensions are (1, 32, 48, 48) CxDxHxW because we will use 3D convolutions, 
+        # so we need to add the channel dimension even if it's grayscale implicitly
         if self.augmentation:
             ct_cropped = self.do_augmentation(ct_cropped) 
         
