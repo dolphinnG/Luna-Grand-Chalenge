@@ -32,14 +32,15 @@ class CTScan:
         ct_img = sitk.ReadImage(path_mhdfile) #contain metadata getters
         ct_img_arr = sitk.GetArrayFromImage(ct_img).astype(np.float32)
         self.ct_img_arr = ct_img_arr
-        #crop HU values to [-1000, 1000]
-        np.clip(ct_img_arr, -1000, 1000, out=ct_img_arr)
+        # #crop HU values to [-1000, 1000]
+        # np.clip(ct_img_arr, -1000, 1000, out=ct_img_arr)
         
         self.origin_xyz = np.array(ct_img.GetOrigin())
         self.vxSize_xyz = np.array(ct_img.GetSpacing())
         self.direction_matrix = np.array(ct_img.GetDirection()).reshape(3, 3)
+        self.positive_mask = None # holder for positive mask, used by CTScan_seg class
     
-    def get_candidate_croppedChunk_inVoxelCoord(self, center_xyz, axis_sizes = (32, 48, 48)):
+    def get_ct_cropped(self, center_xyz, axis_sizes = (32, 48, 48)):
         """
         center_xyz: tuple of 3 floats, center of the chunk in xyz coord
         axis_size: tuple of 3 integers, size of the chunk in each axis. Default is (32, 48, 48)
@@ -62,21 +63,30 @@ class CTScan:
                 start_idx = int(ct_sizes[idx] - axis_size)
             
             slices.append(slice(start_idx, end_idx))
-        ct_cropped = self.ct_img_arr[tuple(slices)]
-        return ct_cropped
+        ct_cropped = self.ct_img_arr[tuple(slices)] # get the cropped chunk of the CT scan
+        if self.positive_mask: 
+            mask_cropped = self.positive_mask[tuple(slices)] # get the cropped chunk of the positive mask
+            return ct_cropped, mask_cropped
+        return ct_cropped, None
+    
+    @staticmethod
+    @lru_cache(maxsize=1, typed=True)
+    def _get_single_ct_lru_cache(seriesuid): #inner use only
+        ct = CTScan(seriesuid)
+        return ct
+    
+    @staticmethod
+    @disk_cache.memoize(typed=True)
+    def get_ct_cropped_disk_cache(seriesuid, center_xyz, axis_sizes = (32, 48, 48)):
+        ct = CTScan._get_single_ct_lru_cache(seriesuid)
+        # this is why need lru cache of size 1, 
+        # but we shuffled the dataset, size 1 cache is not enough
+        # so single ct object cache is only useful during prepcache, the datasets always rely on diskcached ct chunks
+        ct_cropped, mask_cropped = ct.get_ct_cropped(center_xyz, axis_sizes)
+        #crop HU values to [-1000, 1000]
+        np.clip(ct_cropped, -1000, 1000, out=ct_cropped)
+        return ct_cropped, mask_cropped
 
-@lru_cache(maxsize=1, typed=True)
-def get_single_ct_lru_cache(seriesuid):
-    ct = CTScan(seriesuid)
-    return ct
-
-@disk_cache.memoize(typed=True)
-def get_ct_cropped_disk_cache(seriesuid, center_xyz, axis_sizes = (32, 48, 48)):
-    ct = get_single_ct_lru_cache(seriesuid)
-    # this is why need lru cache of size 1, 
-    # but we shuffled the dataset, size 1 cache is not enough
-    # so single ct object cache is only useful during prepcache, the datasets always rely on diskcached ct chunks
-    return ct.get_candidate_croppedChunk_inVoxelCoord(center_xyz, axis_sizes)
 
 @lru_cache(maxsize=1, typed=True)
 def create_df_candidates_info() -> pd.DataFrame:
@@ -158,10 +168,10 @@ def create_df_candidates_info() -> pd.DataFrame:
     df_candidates_info['class'] = df_candidates_info['class'].astype(int).astype(bool)
     df_candidates_info.rename(columns={'class': 'isNodule'}, inplace=True)
     df_candidates_info['diameter_mm'] = df_candidates_info['diameter_mm'].astype(float)
-    df_candidates_info_reset_index = df_candidates_info.reset_index()
-    return df_candidates_info_reset_index
+    # df_candidates_info_reset_index = df_candidates_info.reset_index()
+    return df_candidates_info
 
-holder = create_df_candidates_info() #anti pattern, should fix this
+holder = create_df_candidates_info().reset_index() #anti pattern, should fix this
 class LunaDataset(Dataset):
     #custome implementation of a dataset that loads the CT scans and candidate info
     
@@ -206,7 +216,7 @@ class LunaDataset(Dataset):
             # this is for validation set
             candidateInfo = self.df_candidates.iloc[idx]
             
-        ct_cropped = get_ct_cropped_disk_cache(candidateInfo['seriesuid'], candidateInfo['xyzCoord'])
+        ct_cropped, _ = CTScan.get_ct_cropped_disk_cache(candidateInfo['seriesuid'], candidateInfo['xyzCoord'])
         ct_cropped = torch.tensor(ct_cropped).unsqueeze(0) # add channel input dimension
         if self.augmentation:
             ct_cropped = self.do_augmentation(ct_cropped) 

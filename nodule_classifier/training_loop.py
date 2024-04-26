@@ -203,7 +203,7 @@ class TrainingLoop:
             )
             
 def build_training_loop():
-    unzipped_path = 'D:/LIDC-IDRI_unzipped'
+    # unzipped_path = 'D:/LIDC-IDRI_unzipped'
     model = LunaModel()
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-3)
     loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
